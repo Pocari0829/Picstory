@@ -105,7 +105,7 @@ export default function PicstoryApp() {
     <>
       <Header onHome={reset} />
       <main className="page">
-        <h1 className="page__lead">사진 한 장으로 일본의 이야기를 발견 해보세요!</h1>
+        <h1 className="page__lead">사진 한 장으로 일본의 이야기를 발견해 보세요!</h1>
 
         <PhotoCollage photoUrl={photoUrl} scanning={status === 'loading'} onFile={run} />
 
