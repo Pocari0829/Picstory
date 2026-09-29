@@ -1,0 +1,22 @@
+{
+  "name": "picstory",
+  "version": "0.2.0",
+  "private": true,
+  "description": "일본 여행 사진으로 장소의 역사·문화와 주변 명소를 알려주는 미니 웹서비스",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "^15.5.26",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "typescript": "^5.9.3"
+  }
+}
