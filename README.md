@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # PICSTORY
 
 일본 여행 중 찍은 사진을 올리면 AI가 장소를 알아보고 **역사(History)**, **문화적 의미(Cultural Meaning)**, **주변 가볼 만한 곳(Nearby Places)** 을 보여주는 미니 웹서비스입니다.
@@ -51,3 +52,7 @@ public/images/                시안에서 추출한 콜라주 사진 (yasaka-sa
    (장소를 못 찾으면 `{ "identified": false, "message": "이유" }`)
 
 API 키는 서버 라우트에서만 쓰이고 브라우저로는 전달되지 않습니다.
+=======
+# Picstory
+일본 방문 외국인이 겪는 불편 하나를 해결하는 한 화면짜리 서비스
+>>>>>>> 274f4f8110375db1b6587d25304d0ce90cc58d91

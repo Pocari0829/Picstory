@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 node_modules
 .next
 out
@@ -6,3 +7,6 @@ out
 next-env.d.ts
 *.tsbuildinfo
 .DS_Store
+=======
+.env
+>>>>>>> 274f4f8110375db1b6587d25304d0ce90cc58d91
