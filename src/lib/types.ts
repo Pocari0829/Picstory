@@ -8,6 +8,8 @@ export interface NearbyPlace {
   why?: string; // 추천 이유 한 문장
   website?: string | null; // 공식 웹사이트, 모르면 null
   phone?: string | null; // 전화번호, 모르면 null
+  location?: { latitude?: number; longitude?: number };
+  mapsUrl?: string;
 }
 
 /** POST /api/analyze 응답 — 백엔드(Gemini)도 이 모양으로 돌려주면 됩니다. */
@@ -18,6 +20,9 @@ export interface AnalyzeResult {
   name_ko?: string; // 야사카 탑
   subtitle?: string; // Hōkan-ji Temple · 法観寺
   area?: string; // 교토 히가시야마구
+  location?: { latitude?: number; longitude?: number };
+  placeId?: string;
+  mapsUrl?: string;
   history?: string[];
   culture?: string[];
   nearby?: NearbyPlace[];

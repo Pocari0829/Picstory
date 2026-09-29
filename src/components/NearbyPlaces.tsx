@@ -15,7 +15,10 @@ function PlaceCard({ place, area }: { place: NearbyPlace; area?: string }) {
   const where = area || 'Japan';
   const website = safeUrl(place.website);
   const webHref = website ?? `https://www.google.com/search?q=${encodeURIComponent(`${place.name_en} ${place.name_ko} ${where}`)}`;
-  const routeHref = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${place.name_en || place.name_ko}, ${where}`)}`;
+  const destination = place.location?.latitude !== undefined && place.location.longitude !== undefined
+    ? `${place.location.latitude},${place.location.longitude}`
+    : `${place.name_en || place.name_ko}, ${where}`;
+  const routeHref = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}`;
 
   return (
     <li className="place-card">
