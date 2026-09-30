@@ -188,6 +188,21 @@ export default function PicstoryApp() {
               <ul className="suggest">
                 {suggestions.map((s) => (
                   <li key={s.name_en ?? s.name_ko} className="suggest__item">
+                    {s.photoUrl && (
+                      <div className="suggest__media">
+                        <img
+                          className="suggest__photo"
+                          src={s.photoUrl}
+                          alt={`${s.name_ko ?? s.name_en ?? "일본 여행지"} 사진`}
+                          loading="lazy"
+                        />
+                        {s.photoCredit && (
+                          <span className="suggest__credit">
+                            사진: {s.photoCredit}
+                          </span>
+                        )}
+                      </div>
+                    )}
                     <h3 className="suggest__name">
                       {s.name_ko}
                       {s.name_en && (

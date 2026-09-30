@@ -126,6 +126,72 @@ button {
   text-align: center;
 }
 
+.suggest {
+  list-style: none;
+  margin: 36px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 18px;
+}
+.suggest__item {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  min-width: 0;
+  padding-bottom: 22px;
+}
+.suggest__photo {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  background: var(--accent-soft);
+}
+.suggest__media {
+  position: relative;
+}
+.suggest__credit {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  color: #fff;
+  font-size: 11px;
+  text-shadow: 0 1px 3px #000;
+}
+.suggest__name,
+.suggest__area,
+.suggest__why,
+.suggest__item > .btn {
+  margin-inline: 24px;
+}
+.suggest__name {
+  margin-top: 22px;
+  margin-bottom: 0;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.suggest__en {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 400;
+}
+.suggest__area {
+  margin-top: 6px;
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+.suggest__why {
+  margin-top: 12px;
+  margin-bottom: 18px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
 .btn {
   font-size: 14px;
   font-weight: 500;

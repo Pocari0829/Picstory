@@ -22,6 +22,10 @@ type PlaceItem = {
   formattedAddress?: string;
   location?: { latitude?: number; longitude?: number };
   googleMapsUri?: string;
+  photos?: Array<{
+    name?: string;
+    authorAttributions?: Array<{ displayName?: string }>;
+  }>;
   addressComponents?: Array<{ shortText?: string; types?: string[] }>;
 };
 
@@ -214,6 +218,7 @@ function searchPlaces(
     "places.formattedAddress",
     "places.location",
     "places.googleMapsUri",
+    "places.photos",
     ...(options.withCountry ? ["places.addressComponents"] : []),
   ].join(",");
   return requestJson<PlacesResponse>(
@@ -493,6 +498,10 @@ nearby는 실제로 방문할 수 있는 장소 4곳을 추천하고, 명소뿐 
               name_en: s.name_en ?? p.displayName?.text ?? s.name_ko,
               area: s.area,
               why: s.why,
+              photoUrl: p.photos?.[0]?.name
+                ? `/api/place-photo?name=${encodeURIComponent(p.photos[0].name)}`
+                : undefined,
+              photoCredit: p.photos?.[0]?.authorAttributions?.[0]?.displayName,
               mapsUrl: p.googleMapsUri,
               location: p.location,
             };
