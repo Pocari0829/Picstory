@@ -22,6 +22,7 @@ type PlaceItem = {
   formattedAddress?: string;
   location?: { latitude?: number; longitude?: number };
   googleMapsUri?: string;
+  addressComponents?: Array<{ shortText?: string; types?: string[] }>;
 };
 
 type PlacesResponse = { places?: PlaceItem[] };
@@ -39,6 +40,7 @@ type VisionHint = {
 
 type GeneratedGuide = {
   is_place_photo?: boolean;
+  country_code?: string;
   confidence?: number;
   reason?: string;
   place_query?: string;
@@ -58,6 +60,14 @@ type GeneratedGuide = {
     website?: string | null;
     phone?: string | null;
   }>;
+  // 일본 밖 장소일 때만 채워지는 필드
+  foreign_place_ko?: string;
+  similar_japan?: Array<{
+    name_ko?: string;
+    name_en?: string;
+    area?: string;
+    why?: string;
+  }>;
 };
 
 // ───────── 설정값 (debug 로그를 보며 조정하세요) ─────────
@@ -75,6 +85,7 @@ const GEMINI_MODELS = (
 const MAX_IMAGE_LENGTH = 20_000_000; // base64 길이 기준 (약 15MB)
 const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_HINTS = 3; // Gemini에게 넘길 Vision 힌트 개수
+const MAX_SUGGESTIONS = 3; // 해외 장소일 때 추천할 일본 여행지 개수
 const MIN_LANDMARK_SCORE = 0.3;
 const MIN_WEB_SCORE = 0.4;
 const MIN_IDENTIFY_CONFIDENCE = 0.6; // Vision 힌트가 있을 때 Gemini 식별 신뢰도 기준
@@ -178,13 +189,59 @@ async function requestJson<T>(url: string, init: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, cache: "no-store" });
   if (!response.ok) {
     const service = new URL(url).hostname;
+    const text = await response.text();
+    if (response.status === 429)
+      console.warn("[429 detail]", service, text.slice(0, 1500));
     throw new HttpError(
       response.status,
       service,
-      `${response.status}:${(await response.text()).slice(0, 300)}`,
+      `${response.status}:${text.slice(0, 300)}`,
     );
   }
   return response.json() as Promise<T>;
+}
+
+// Places 텍스트 검색. 일본 한정 서비스라 regionCode는 항상 JP.
+// withCountry=true면 국가 코드 확인용 addressComponents까지 요청한다.
+function searchPlaces(
+  placesKey: string,
+  textQuery: string,
+  options: { withCountry?: boolean; extra?: Record<string, unknown> } = {},
+) {
+  const fields = [
+    "places.id",
+    "places.displayName",
+    "places.formattedAddress",
+    "places.location",
+    "places.googleMapsUri",
+    ...(options.withCountry ? ["places.addressComponents"] : []),
+  ].join(",");
+  return requestJson<PlacesResponse>(
+    "https://places.googleapis.com/v1/places:searchText",
+    {
+      method: "POST",
+      headers: {
+        ...jsonHeaders,
+        "X-Goog-Api-Key": placesKey,
+        "X-Goog-FieldMask": fields,
+      },
+      body: JSON.stringify({
+        textQuery,
+        languageCode: "ko",
+        regionCode: "JP",
+        ...options.extra,
+      }),
+    },
+  );
+}
+
+// Places 결과가 실제로 일본에 있는지 확인 (국가 코드 우선, 없으면 주소 문자열로 보조 판단)
+function isJapan(place?: PlaceItem) {
+  const country = place?.addressComponents?.find((c) =>
+    c.types?.includes("country"),
+  );
+  if (country?.shortText) return country.shortText.toUpperCase() === "JP";
+  return /일본|Japan|日本/.test(place?.formattedAddress ?? "");
 }
 
 function toLatLng(loc?: {
@@ -312,7 +369,7 @@ export async function POST(req: Request) {
     const hints = selectVisionHints(vision);
     const hintLoc = hints.find((h) => h.latLng)?.latLng;
 
-    // ── 2단계: Gemini가 사진을 직접 보고 장소를 식별 + 안내문 작성 ──
+    // ── 2단계: Gemini가 사진을 직접 보고 장소·나라를 식별 ──
     const hintText = hints.length
       ? hints
           .map((h) => `- ${h.name} (${h.source}, 점수 ${h.score.toFixed(2)})`)
@@ -320,19 +377,22 @@ export async function POST(req: Request) {
       : "없음";
 
     const geminiPrompt = `
-당신은 먼저 사진을 직접 보고 어떤 장소인지 식별해야 합니다.
+당신은 일본 여행 서비스 PICSTORY의 사진 분석가입니다. 이 서비스는 일본의 장소만 안내합니다.
+먼저 사진을 직접 보고 어떤 장소인지, 어느 나라에 있는 곳인지 식별하세요.
 
-[참고용 후보 - 틀릴 수 있으며, 특히 사진 근처의 식당·상점 이름이 섞여 있을 수 있음]
+[참고용 후보 - 틀릴 수 있으며, 특히 사진 근처의 식당·상점 이름이나 다른 나라의 비슷한 장소가 섞여 있을 수 있음]
 ${hintText}
 
 규칙:
 1. is_place_photo: 사진이 실제 장소·건축물·명소를 담고 있으면 true. 음식, 인물 셀피, 스크린샷, 문서, 동물, 물건, 일상적인 실내 사진 등은 false.
-2. place_query: 사진에 실제로 찍힌 대상을 Google 지도에서 찾을 수 있는 검색어로 작성하세요. (예: "Kaminarimon Gate Asakusa Tokyo"). 참고 후보가 사진과 다르면 후보를 무시하고 사진에서 직접 식별한 대상을 쓰세요. 주변 상점·식당이 아니라 사진의 주인공이 되는 장소여야 합니다.
-3. confidence: 식별한 장소가 맞다는 확신도(0~1). 건축 양식, 현판·간판 글자, 상징적 구조물, 주변 풍경 등 시각적 근거가 뚜렷하면 높게, 어떤 장소인지 불분명하면 낮게 매기세요.
-4. is_place_photo가 false이거나 장소를 식별할 수 없으면 나머지 필드는 비워 두세요. 절대 추측해서 채우지 마세요.
+2. country_code: 식별한 장소가 있는 나라의 ISO 3166-1 alpha-2 코드 (일본은 "JP", 한국은 "KR", 중국은 "CN" 등). 간판·현판 문자(가나·한자·한글), 건축 양식, 주변 풍경을 근거로 판단하세요. 한국·중국·대만의 궁궐·사찰·전통 건축처럼 일본과 혼동하기 쉬운 장소는 특히 신중히 구분하세요.
+3. confidence: 식별한 장소와 나라가 모두 맞다는 확신도(0~1). 건축 양식, 현판·간판 글자, 상징적 구조물, 주변 풍경 등 시각적 근거가 뚜렷하면 높게, 불분명하면 낮게 매기세요.
+4. 일본 장소(country_code가 "JP")이면 place_query, name_en, name_ko, subtitle, area, history, culture, nearby를 채우세요. place_query는 사진에 실제로 찍힌 대상을 Google 지도에서 찾을 수 있는 검색어입니다. (예: "Kaminarimon Gate Asakusa Tokyo"). 참고 후보가 사진과 다르면 후보를 무시하고 사진에서 직접 식별한 대상을 쓰세요. 주변 상점·식당이 아니라 사진의 주인공이 되는 장소여야 합니다. foreign_place_ko와 similar_japan은 비워 두세요.
+5. 일본 밖의 장소이면 foreign_place_ko에 "서울 경복궁"처럼 도시와 장소명을 한국어로 적고, similar_japan에 분위기·건축 양식·역할이 닮은 일본 여행지를 ${MAX_SUGGESTIONS}곳 적으세요. 실제로 존재하는 유명한 곳만 쓰고, 각 항목에 name_ko, name_en, area(도시·구역), why(어떤 점이 닮았는지 한 문장)를 채우세요. place_query, name_en, name_ko, subtitle, area, history, culture, nearby는 비워 두세요.
+6. is_place_photo가 false이거나 장소를 식별할 수 없으면 나머지 필드는 비워 두세요. 절대 추측해서 채우지 마세요.
 
 반드시 JSON 객체만 반환하세요. 마크다운 코드 블록은 사용하지 마세요.
-형식: {"is_place_photo":true,"confidence":0.0~1.0,"reason":"판단 근거 한 문장","place_query":"Kaminarimon Gate Asakusa Tokyo","name_en":"YASAKA PAGODA","name_ko":"야사카 탑","subtitle":"Hōkan-ji Temple · 法観寺","area":"교토 히가시야마구","history":["한국어 역사 설명 3~4개"],"culture":["한국어 문화적 의미 2~3개"],"nearby":[{"name_ko":"한국어명","name_en":"영문명","subtitle":"현지명","category":"명소|맛집|상점|시장|카페","walk":"도보 거리","why":"추천 이유","website":null,"phone":null}]}
+형식: {"is_place_photo":true,"country_code":"JP","confidence":0.0~1.0,"reason":"판단 근거 한 문장","place_query":"Kaminarimon Gate Asakusa Tokyo","name_en":"YASAKA PAGODA","name_ko":"야사카 탑","subtitle":"Hōkan-ji Temple · 法観寺","area":"교토 히가시야마구","history":["한국어 역사 설명 3~4개"],"culture":["한국어 문화적 의미 2~3개"],"nearby":[{"name_ko":"한국어명","name_en":"영문명","subtitle":"현지명","category":"명소|맛집|상점|시장|카페","walk":"도보 거리","why":"추천 이유","website":null,"phone":null}],"foreign_place_ko":"","similar_japan":[{"name_ko":"금각사","name_en":"Kinkaku-ji","area":"교토 기타구","why":"궁궐·사찰의 웅장한 전통 건축과 정원이 닮았어요."}]}
 제목은 반드시 "영문명 | 한글명"으로 표시할 수 있도록 name_en과 name_ko를 분리하세요. area는 전체 주소가 아니라 도시·구역처럼 짧은 지역명으로 작성하세요.
 역사 설명은 각 항목을 2~3개의 한국어 문장으로 작성하세요. 건립 시기와 유래, 주요 인물·사건, 재건·보존 과정, 현재까지 이어진 역사적 의미를 포함하되 확인되지 않은 전설은 사실처럼 단정하지 마세요.
 nearby는 실제로 방문할 수 있는 장소 4곳을 추천하고, 명소뿐 아니라 가능한 경우 현지 맛집 또는 대표 음식점 1곳 이상과 상점·시장·공예점 1곳 이상을 포함하세요. 각 장소의 category는 명소, 맛집, 상점, 시장, 카페 중 하나를 사용하세요. 모르는 웹사이트와 전화번호는 null로 두세요.
@@ -392,48 +452,110 @@ nearby는 실제로 방문할 수 있는 장소 4곳을 추천하고, 명소뿐 
       hints.length > 0
         ? MIN_IDENTIFY_CONFIDENCE
         : MIN_IDENTIFY_CONFIDENCE_NO_HINT;
-    const history = toStringArray(generated.history);
-    const placeQuery = generated.place_query?.trim();
+    const countryCode = generated.country_code?.trim().toUpperCase();
 
-    if (
-      generated.is_place_photo !== true ||
-      !placeQuery ||
-      confidence < requiredConfidence ||
-      history.length === 0
-    ) {
+    // 공통 게이트: 장소 사진이 아니거나 확신이 낮으면 거절
+    if (generated.is_place_photo !== true || confidence < requiredConfidence) {
       return notIdentified(NOT_IDENTIFIED.notPlacePhoto, {
         gate: "gemini",
         model: usedModel,
         requiredConfidence,
         hints,
         is_place_photo: generated.is_place_photo,
+        country_code: countryCode,
+        confidence,
+        reason: generated.reason,
+      });
+    }
+
+    // ── 일본 밖 장소: 어디인지 알려주고, 닮은 일본 여행지를 추천 ──
+    // country_code를 못 채운 경우는 일본으로 보고 진행하며, 아래 Places 국가 검증이 다시 걸러낸다.
+    if (countryCode && countryCode !== "JP") {
+      const foreignPlace =
+        generated.foreign_place_ko?.trim() ||
+        generated.name_ko?.trim() ||
+        "일본 밖의 장소";
+
+      // 추천한 일본 여행지도 Places에서 실제로 일본에 있는지 확인
+      const suggestionResults = await Promise.allSettled(
+        (generated.similar_japan ?? [])
+          .slice(0, MAX_SUGGESTIONS)
+          .map(async (s) => {
+            const query = s.name_en ?? s.name_ko;
+            if (!query) return null;
+            const res = await searchPlaces(placesKey, `${query}, Japan`, {
+              withCountry: true,
+            });
+            const p = res.places?.[0];
+            if (!p || !toLatLng(p.location) || !isJapan(p)) return null;
+            return {
+              name_ko: s.name_ko ?? p.displayName?.text ?? s.name_en,
+              name_en: s.name_en ?? p.displayName?.text ?? s.name_ko,
+              area: s.area,
+              why: s.why,
+              mapsUrl: p.googleMapsUri,
+              location: p.location,
+            };
+          }),
+      );
+      const suggestions = suggestionResults.flatMap((r) =>
+        r.status === "fulfilled" && r.value ? [r.value] : [],
+      );
+
+      const message = suggestions.length
+        ? `여기는 ${foreignPlace} 같아요! PICSTORY는 일본 이야기를 들려드리는 곳이라, 대신 분위기가 닮은 일본 여행지를 골라봤어요.`
+        : `여기는 ${foreignPlace} 같아요! PICSTORY는 일본 이야기를 들려드리는 곳이라, 일본 사진만 분석할 수 있어요.`;
+
+      if (IS_DEV) {
+        console.log(
+          "[analyze outside-japan]",
+          JSON.stringify(
+            {
+              model: usedModel,
+              country_code: countryCode,
+              foreignPlace,
+              confidence,
+              reason: generated.reason,
+              suggestions: suggestions.map((s) => s.name_ko),
+            },
+            null,
+            2,
+          ),
+        );
+      }
+
+      return NextResponse.json({
+        identified: false,
+        outsideJapan: true,
+        countryCode,
+        foreignPlace,
+        message,
+        suggestions,
+      });
+    }
+
+    // ── 일본 장소: 안내문 검증 ──
+    const history = toStringArray(generated.history);
+    const placeQuery = generated.place_query?.trim();
+    if (!placeQuery || history.length === 0) {
+      return notIdentified(NOT_IDENTIFIED.notPlacePhoto, {
+        gate: "gemini-fields",
+        model: usedModel,
         place_query: placeQuery,
+        country_code: countryCode,
         confidence,
         reason: generated.reason,
         historyCount: history.length,
       });
     }
 
-    // ── 3단계: Gemini가 식별한 이름으로 Places 확인 + Vision 좌표와 교차검증 ──
-    const placesRes = await requestJson<PlacesResponse>(
-      "https://places.googleapis.com/v1/places:searchText",
-      {
-        method: "POST",
-        headers: {
-          ...jsonHeaders,
-          "X-Goog-Api-Key": placesKey,
-          "X-Goog-FieldMask":
-            "places.id,places.displayName,places.formattedAddress,places.location,places.googleMapsUri",
-        },
-        body: JSON.stringify({
-          textQuery: placeQuery,
-          languageCode: "ko",
-          ...(hintLoc
-            ? { locationBias: { circle: { center: hintLoc, radius: 5000 } } }
-            : {}),
-        }),
-      },
-    );
+    // ── 3단계: Gemini가 식별한 이름으로 Places 확인 + 일본 여부·Vision 좌표 교차검증 ──
+    const placesRes = await searchPlaces(placesKey, placeQuery, {
+      withCountry: true,
+      extra: hintLoc
+        ? { locationBias: { circle: { center: hintLoc, radius: 5000 } } }
+        : {},
+    });
     const place = placesRes.places?.[0];
     const placeLoc = toLatLng(place?.location);
     if (!place?.displayName?.text || !placeLoc) {
@@ -443,6 +565,15 @@ nearby는 실제로 방문할 수 있는 장소 4곳을 추천하고, 명소뿐 
         place_query: placeQuery,
         confidence,
         reason: generated.reason,
+      });
+    }
+    if (!isJapan(place)) {
+      return notIdentified(NOT_IDENTIFIED.mismatch, {
+        gate: "places-country",
+        model: usedModel,
+        place_query: placeQuery,
+        place: place.displayName.text,
+        address: place.formattedAddress,
       });
     }
     if (hintLoc) {
@@ -464,21 +595,9 @@ nearby는 실제로 방문할 수 있는 장소 4곳을 추천하고, 명소뿐 
     const settled = await Promise.allSettled(
       (generated.nearby ?? []).slice(0, 4).map(async (recommendation) => {
         if (!recommendation.name_en && !recommendation.name_ko) return null;
-        const nearbyPlaces = await requestJson<PlacesResponse>(
-          "https://places.googleapis.com/v1/places:searchText",
-          {
-            method: "POST",
-            headers: {
-              ...jsonHeaders,
-              "X-Goog-Api-Key": placesKey,
-              "X-Goog-FieldMask":
-                "places.displayName,places.formattedAddress,places.location,places.googleMapsUri",
-            },
-            body: JSON.stringify({
-              textQuery: `${recommendation.name_en ?? recommendation.name_ko}, ${place.formattedAddress ?? ""}`,
-              languageCode: "ko",
-            }),
-          },
+        const nearbyPlaces = await searchPlaces(
+          placesKey,
+          `${recommendation.name_en ?? recommendation.name_ko}, ${place.formattedAddress ?? ""}`,
         );
         const nearbyPlace = nearbyPlaces.places?.[0];
         const nearbyLoc = toLatLng(nearbyPlace?.location);

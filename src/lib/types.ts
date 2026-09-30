@@ -12,10 +12,20 @@ export interface NearbyPlace {
   mapsUrl?: string;
 }
 
+/** 일본 밖 사진을 올렸을 때 추천하는, 분위기가 닮은 일본 여행지 */
+export interface JapanSuggestion {
+  name_ko?: string; // 금각사
+  name_en?: string; // Kinkaku-ji
+  area?: string; // 교토 기타구
+  why?: string; // 어떤 점이 닮았는지 한 문장
+  mapsUrl?: string;
+  location?: { latitude?: number; longitude?: number };
+}
+
 /** POST /api/analyze 응답 — 백엔드(Gemini)도 이 모양으로 돌려주면 됩니다. */
 export interface AnalyzeResult {
   identified: boolean;
-  confidence?: 'high' | 'medium' | 'low';
+  confidence?: "high" | "medium" | "low";
   name_en?: string; // YASAKA PAGODA
   name_ko?: string; // 야사카 탑
   subtitle?: string; // Hōkan-ji Temple · 法観寺
@@ -27,10 +37,16 @@ export interface AnalyzeResult {
   culture?: string[];
   nearby?: NearbyPlace[];
   message?: string | null; // identified=false 일 때 이유
+
+  // 일본 밖 장소일 때 (identified=false 와 함께 내려옴)
+  outsideJapan?: boolean;
+  countryCode?: string; // KR
+  foreignPlace?: string; // 서울 경복궁
+  suggestions?: JapanSuggestion[];
 }
 
 /** POST /api/analyze 요청 */
 export interface AnalyzeRequest {
   image: string; // base64 (data: 접두어 없음)
-  mimeType: 'image/jpeg';
+  mimeType: "image/jpeg";
 }
