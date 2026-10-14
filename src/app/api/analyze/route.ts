@@ -95,6 +95,7 @@ const GEMINI_MODELS = [
 ];
 
 const MAX_IMAGE_LENGTH = 20_000_000; // base64 길이 기준 (약 15MB)
+const MAX_GEMINI_OUTPUT_TOKENS = 4096;
 const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_HINTS = 3; // Gemini에게 넘길 Vision 힌트 개수
 const MAX_SUGGESTIONS = 3; // 해외 장소일 때 추천할 일본 여행지 개수
@@ -105,6 +106,9 @@ const MIN_IDENTIFY_CONFIDENCE_NO_HINT = 0.8; // Vision 힌트가 전혀 없을 �
 const MAX_HINT_DISTANCE_KM = 5; // Vision 랜드마크 좌표 ↔ 최종 Places 결과 허용 거리
 const MAX_NEARBY_DISTANCE_KM = 3; // 메인 장소 ↔ 주변 추천 허용 거리
 const RETRY_AFTER_SECONDS = 60; // 한도 초과 시 클라이언트에 알려줄 대기 시간(초)
+const VERIFIED_KOREAN_PLACE_NAMES = [
+  { aliases: ["kaminarimon", "雷門"], name: "카미나리몬" },
+];
 
 // Vision 웹 엔티티에서 자주 나오는 일반 단어 (장소 식별에 쓸모없음)
 const GENERIC_ENTITIES = new Set([
@@ -328,6 +332,26 @@ function toStringArray(value: unknown): string[] {
     : [];
 }
 
+function resolveKoreanPlaceName(
+  generatedName: string | undefined,
+  localizedName: string | undefined,
+  ...identityCandidates: Array<string | undefined>
+) {
+  const candidates = identityCandidates.filter((value): value is string =>
+    Boolean(value),
+  );
+  const verifiedName = VERIFIED_KOREAN_PLACE_NAMES.find(({ aliases }) =>
+    aliases.some((alias) =>
+      candidates.some((candidate) =>
+        candidate.toLowerCase().includes(alias.toLowerCase()),
+      ),
+    ),
+  )?.name;
+  if (verifiedName) return verifiedName;
+  if (localizedName && /[가-힣]/.test(localizedName)) return localizedName;
+  return generatedName ?? localizedName;
+}
+
 export async function POST(req: Request) {
   let body: Partial<AnalyzeRequest>;
   try {
@@ -403,6 +427,7 @@ ${hintText}
 4. 일본 장소(country_code가 "JP")이면 place_query, name_en, name_ko, subtitle, area, history, culture, nearby를 채우세요. place_query는 사진에 실제로 찍힌 대상을 Google 지도에서 찾을 수 있는 검색어입니다. (예: "Kaminarimon Gate Asakusa Tokyo"). 참고 후보가 사진과 다르면 후보를 무시하고 사진에서 직접 식별한 대상을 쓰세요. 주변 상점·식당이 아니라 사진의 주인공이 되는 장소여야 합니다. foreign_place_ko와 similar_japan은 비워 두세요.
 5. 일본 밖의 장소이면 foreign_place_ko에 "서울 경복궁"처럼 도시와 장소명을 한국어로 적고, similar_japan에 분위기·건축 양식·역할이 닮은 일본 여행지를 ${MAX_SUGGESTIONS}곳 적으세요. 실제로 존재하는 유명한 곳만 쓰고, 각 항목에 name_ko, name_en, area(도시·구역), why(어떤 점이 닮았는지 한 문장)를 채우세요. place_query, name_en, name_ko, subtitle, area, history, culture, nearby는 비워 두세요.
 6. is_place_photo가 false이거나 장소를 식별할 수 없으면 나머지 필드는 비워 두세요. 절대 추측해서 채우지 마세요.
+7. name_ko와 주변 장소·일본 추천지의 한국어 이름은 통용되는 표기를 사용하세요. 일본 장소는 영어 이름을 임의로 한글화하지 말고 일본어 원어 발음에 맞춰 적으세요. 예: Kaminarimon Gate 또는 雷門은 "카미나리몬"입니다.
 
 반드시 JSON 객체만 반환하세요. 마크다운 코드 블록은 사용하지 마세요.
 형식: {"is_place_photo":true,"country_code":"JP","confidence":0.0~1.0,"reason":"판단 근거 한 문장","place_query":"Kaminarimon Gate Asakusa Tokyo","name_en":"YASAKA PAGODA","name_ko":"야사카 탑","subtitle":"Hōkan-ji Temple · 法観寺","area":"교토 히가시야마구","history":["한국어 역사 설명 3~4개"],"culture":["한국어 문화적 의미 2~3개"],"nearby":[{"name_ko":"한국어명","name_en":"영문명","subtitle":"현지명","category":"명소|맛집|상점|시장|카페","walk":"도보 거리","why":"추천 이유","website":null,"phone":null}],"foreign_place_ko":"","similar_japan":[{"name_ko":"금각사","name_en":"Kinkaku-ji","area":"교토 기타구","why":"궁궐·사찰의 웅장한 전통 건축과 정원이 닮았어요."}]}
@@ -434,6 +459,7 @@ nearby는 실제로 방문할 수 있는 장소 4곳을 추천하고, 명소뿐 
               generationConfig: {
                 responseMimeType: "application/json",
                 temperature: 0.2,
+                maxOutputTokens: MAX_GEMINI_OUTPUT_TOKENS,
               },
             }),
           },
@@ -502,7 +528,12 @@ nearby는 실제로 방문할 수 있는 장소 4곳을 추천하고, 명소뿐 
             const p = res.places?.[0];
             if (!p || !toLatLng(p.location) || !isJapan(p)) return null;
             return {
-              name_ko: s.name_ko ?? p.displayName?.text ?? s.name_en,
+              name_ko: resolveKoreanPlaceName(
+                s.name_ko,
+                p.displayName?.text,
+                s.name_en,
+                p.displayName?.text,
+              ),
               name_en: s.name_en ?? p.displayName?.text ?? s.name_ko,
               area: s.area,
               why: s.why,
@@ -623,10 +654,12 @@ nearby는 실제로 방문할 수 있는 장소 4곳을 추천하고, 명소뿐 
           return null; // 너무 멀면 제외
         return {
           ...recommendation,
-          name_ko:
-            recommendation.name_ko ??
-            nearbyPlace.displayName?.text ??
+          name_ko: resolveKoreanPlaceName(
+            recommendation.name_ko,
+            nearbyPlace.displayName?.text,
             recommendation.name_en,
+            nearbyPlace.displayName?.text,
+          ),
           name_en:
             recommendation.name_en ??
             nearbyPlace.displayName?.text ??
@@ -663,7 +696,13 @@ nearby는 실제로 방문할 수 있는 장소 4곳을 추천하고, 명소뿐 
       identified: true,
       confidence: confidence >= 0.85 ? "high" : "medium",
       name_en: generated.name_en ?? place.displayName.text,
-      name_ko: generated.name_ko ?? place.displayName.text,
+      name_ko: resolveKoreanPlaceName(
+        generated.name_ko,
+        place.displayName.text,
+        placeQuery,
+        generated.name_en,
+        place.displayName.text,
+      ),
       subtitle: generated.subtitle ?? place.formattedAddress,
       area: generated.area ?? place.formattedAddress,
       location: place.location,
