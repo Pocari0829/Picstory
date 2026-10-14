@@ -70,17 +70,25 @@ type GeneratedGuide = {
   }>;
 };
 
-// ───────── 설정값 (debug 로그를 보며 조정하세요) ─────────
-// .env.local 에 GEMINI_MODELS=모델A,모델B 처럼 쉼표로 적으면 앞에서부터 시도하고,
-// 한도 초과(429)·과부하(503)일 때 다음 모델로 넘어갑니다. (모델 코드는 ListModels로 확인)
-const GEMINI_MODELS = (
-  process.env.GEMINI_MODELS ??
-  process.env.GEMINI_MODEL ??
-  "gemini-3-flash-preview"
-)
+// Keep stable fallbacks after configured models so retired or rate-limited
+// model IDs do not block photo analysis.
+const DEFAULT_GEMINI_MODELS = [
+  "gemini-3.8-flash",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash-lite",
+];
+const configuredGeminiModels = (process.env.GEMINI_MODELS ?? "")
   .split(",")
-  .map((m) => m.trim())
+  .map((model) => model.trim())
   .filter(Boolean);
+const legacyGeminiModel = process.env.GEMINI_MODEL?.trim();
+const GEMINI_MODELS = [
+  ...new Set([
+    ...configuredGeminiModels,
+    ...DEFAULT_GEMINI_MODELS,
+    ...(legacyGeminiModel ? [legacyGeminiModel] : []),
+  ]),
+];
 
 const MAX_IMAGE_LENGTH = 20_000_000; // base64 길이 기준 (약 15MB)
 const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -429,7 +437,7 @@ nearby는 실제로 방문할 수 있는 장소 4곳을 추천하고, 명소뿐 
         break;
       } catch (e) {
         lastError = e;
-        if (isRetryLater(e)) {
+        if (isRetryLater(e) || (e instanceof HttpError && e.status === 404)) {
           console.warn(
             `Gemini model "${model}" unavailable (${e.status}), trying next`,
           );
