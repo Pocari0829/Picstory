@@ -81,25 +81,25 @@ type GeneratedGuide = {
   }>;
 };
 
-// Keep stable fallbacks after configured models so retired or rate-limited
-// model IDs do not block photo analysis.
+// An explicit model list is authoritative; otherwise use the stable defaults.
 const DEFAULT_GEMINI_MODELS = [
+  "gemini-3.5-flash-lite",
   "gemini-3.8-flash",
   "gemini-3.6-flash",
-  "gemini-3.5-flash-lite",
 ];
 const configuredGeminiModels = (process.env.GEMINI_MODELS ?? "")
   .split(",")
   .map((model) => model.trim())
   .filter(Boolean);
 const legacyGeminiModel = process.env.GEMINI_MODEL?.trim();
-const GEMINI_MODELS = [
-  ...new Set([
-    ...configuredGeminiModels,
-    ...DEFAULT_GEMINI_MODELS,
-    ...(legacyGeminiModel ? [legacyGeminiModel] : []),
-  ]),
-];
+const GEMINI_MODELS = configuredGeminiModels.length
+  ? [...new Set(configuredGeminiModels)]
+  : [
+      ...new Set([
+        ...DEFAULT_GEMINI_MODELS,
+        ...(legacyGeminiModel ? [legacyGeminiModel] : []),
+      ]),
+    ];
 
 const MAX_IMAGE_LENGTH = 20_000_000; // base64 길이 기준 (약 15MB)
 const MAX_GEMINI_OUTPUT_TOKENS = 4096;
@@ -177,6 +177,7 @@ class HttpError extends Error {
     public status: number,
     public service: string,
     message: string,
+    public responseBody: string,
   ) {
     super(message);
   }
@@ -186,6 +187,26 @@ class HttpError extends Error {
 function isRetryLater(error: unknown): error is HttpError {
   return (
     error instanceof HttpError && (error.status === 429 || error.status === 503)
+  );
+}
+
+function isSearchGroundingRateLimit(error: unknown): error is HttpError {
+  return (
+    error instanceof HttpError &&
+    error.status === 429 &&
+    error.service === "generativelanguage.googleapis.com" &&
+    /grounding|google[_ ]search|search_ground/i.test(error.responseBody)
+  );
+}
+
+function isGeminiQuotaError(error: unknown): error is HttpError {
+  return (
+    error instanceof HttpError &&
+    error.status === 429 &&
+    error.service === "generativelanguage.googleapis.com" &&
+    /you exceeded your current quota|check your plan and billing details/i.test(
+      error.responseBody,
+    )
   );
 }
 
@@ -219,6 +240,7 @@ async function requestJson<T>(url: string, init: RequestInit): Promise<T> {
       response.status,
       service,
       `${response.status}:${text.slice(0, 300)}`,
+      text,
     );
   }
   return response.json() as Promise<T>;
@@ -435,7 +457,7 @@ ${hintText}
 5. 일본 밖의 장소이면 foreign_place_ko에 "서울 경복궁"처럼 도시와 장소명을 한국어로 적고, similar_japan에 분위기·건축 양식·역할이 닮은 일본 여행지를 ${MAX_SUGGESTIONS}곳 적으세요. 실제로 존재하는 유명한 곳만 쓰고, 각 항목에 name_ko, name_en, area(도시·구역), why(어떤 점이 닮았는지 한 문장)를 채우세요. place_query, name_en, name_ko, subtitle, area, history, culture, nearby는 비워 두세요.
 6. is_place_photo가 false이거나 장소를 식별할 수 없으면 나머지 필드는 비워 두세요. 절대 추측해서 채우지 마세요.
 7. name_ko와 주변 장소·일본 추천지의 한국어 이름은 통용되는 표기를 사용하세요. 일본 장소는 영어 이름을 임의로 한글화하지 말고 일본어 원어 발음에 맞춰 적으세요. 예: Kaminarimon Gate 또는 雷門은 "카미나리몬"입니다.
-8. 일본 장소의 history를 쓸 때만 Google 검색으로 일본어 원문 자료를 확인하세요. 공식 문화재·관광·지자체·박물관 자료를 우선하고, 내용을 한국어로 요약하세요. 인명과 연호는 한자의 뜻으로 번역하지 말고 일본어 발음과 통용되는 한국어 표기를 사용하세요. 예: 平安時代는 "헤이안 시대"이며 "평안 시대"가 아닙니다. 검색으로 확인할 수 없는 내용은 단정하지 마세요.
+8. 일본 장소의 history를 쓸 때 Google 검색 도구가 제공되면 일본어 원문 자료를 확인하세요. 공식 문화재·관광·지자체·박물관 자료를 우선하고, 내용을 한국어로 요약하세요. 인명과 연호는 한자의 뜻으로 번역하지 말고 일본어 발음과 통용되는 한국어 표기를 사용하세요. 예: 平安時代는 "헤이안 시대"이며 "평안 시대"가 아닙니다. 검색으로 확인할 수 없는 내용은 단정하지 마세요.
 
 반드시 JSON 객체만 반환하세요. 마크다운 코드 블록은 사용하지 마세요.
 형식: {"is_place_photo":true,"country_code":"JP","confidence":0.0~1.0,"reason":"판단 근거 한 문장","place_query":"Kaminarimon Gate Asakusa Tokyo","name_en":"YASAKA PAGODA","name_ko":"야사카 탑","subtitle":"Hōkan-ji Temple · 法観寺","area":"교토 히가시야마구","history":["한국어 역사 설명 3~4개"],"culture":["한국어 문화적 의미 2~3개"],"nearby":[{"name_ko":"한국어명","name_en":"영문명","subtitle":"현지명","category":"명소|맛집|상점|시장|카페","walk":"도보 거리","why":"추천 이유","website":null,"phone":null}],"foreign_place_ko":"","similar_japan":[{"name_ko":"금각사","name_en":"Kinkaku-ji","area":"교토 기타구","why":"궁궐·사찰의 웅장한 전통 건축과 정원이 닮았어요."}]}
@@ -444,46 +466,72 @@ ${hintText}
 nearby는 실제로 방문할 수 있는 장소 4곳을 추천하고, 명소뿐 아니라 가능한 경우 현지 맛집 또는 대표 음식점 1곳 이상과 상점·시장·공예점 1곳 이상을 포함하세요. 각 장소의 category는 명소, 맛집, 상점, 시장, 카페 중 하나를 사용하세요. 모르는 웹사이트와 전화번호는 null로 두세요.
 `.trim();
 
-    // 모델을 앞에서부터 시도하고, 한도 초과(429)/과부하(503)면 다음 모델로 전환
+    const geminiContents = [
+      {
+        parts: [
+          { inlineData: { mimeType, data: body.image } },
+          { text: geminiPrompt },
+        ],
+      },
+    ];
+    const requestGemini = (model: string, withSearch: boolean) =>
+      requestJson<GeminiResponse>(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(geminiKey)}`,
+        {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            ...(withSearch ? { tools: [{ google_search: {} }] } : {}),
+            contents: geminiContents,
+            generationConfig: {
+              responseMimeType: "application/json",
+              temperature: 0.2,
+              maxOutputTokens: MAX_GEMINI_OUTPUT_TOKENS,
+            },
+          }),
+        },
+      );
+
+    // 모델을 앞에서부터 시도하고, grounding 검색 한도면 검색 없이 재시도한다.
     let gemini: GeminiResponse | undefined;
     let usedModel = "";
     let lastError: unknown;
+    let searchGroundingLimit: HttpError | undefined;
     for (const model of GEMINI_MODELS) {
       try {
-        gemini = await requestJson<GeminiResponse>(
-          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(geminiKey)}`,
-          {
-            method: "POST",
-            headers: jsonHeaders,
-            body: JSON.stringify({
-              tools: [{ google_search: {} }],
-              contents: [
-                {
-                  parts: [
-                    { inlineData: { mimeType, data: body.image } },
-                    { text: geminiPrompt },
-                  ],
-                },
-              ],
-              generationConfig: {
-                responseMimeType: "application/json",
-                temperature: 0.2,
-                maxOutputTokens: MAX_GEMINI_OUTPUT_TOKENS,
-              },
-            }),
-          },
-        );
+        gemini = await requestGemini(model, true);
         usedModel = model;
         break;
       } catch (e) {
         lastError = e;
+        if (isRetryLater(e) && e.status === 429) {
+          searchGroundingLimit = e;
+          console.warn(
+            `Gemini model "${model}" returned 429${isSearchGroundingRateLimit(e) ? " for Search grounding" : ""}, retrying without search`,
+          );
+          break;
+        }
         if (isRetryLater(e) || (e instanceof HttpError && e.status === 404)) {
           console.warn(
-            `Gemini model "${model}" unavailable (${e.status}), trying next`,
+            `Gemini model "${model}" failed (${e.status}), trying next configured model`,
           );
           continue;
         }
         throw e;
+      }
+    }
+    if (!gemini && searchGroundingLimit) {
+      for (const model of GEMINI_MODELS) {
+        try {
+          gemini = await requestGemini(model, false);
+          usedModel = model;
+          break;
+        } catch (e) {
+          lastError = e;
+          if (isRetryLater(e) || (e instanceof HttpError && e.status === 404))
+            continue;
+          throw e;
+        }
       }
     }
     if (!gemini) throw lastError ?? new Error("gemini_no_model");
@@ -735,10 +783,14 @@ nearby는 실제로 방문할 수 있는 장소 4곳을 추천하고, 명소뿐 
     // 사용량 한도 초과(429) / 일시적 과부하(503): 나중에 다시 시도 안내
     if (isRetryLater(error)) {
       console.warn(`Rate limited by ${error.service} (${error.status})`);
+      const geminiQuotaExceeded = isGeminiQuotaError(error);
       return NextResponse.json(
         {
           error: "rate_limited",
-          message: RATE_LIMITED_MESSAGE,
+          message: geminiQuotaExceeded
+            ? "Gemini API 모델 또는 프로젝트 사용 한도에 도달했어요. Google AI Studio에서 현재 모델의 RPM·TPM·RPD와 API 키가 속한 프로젝트를 확인해 주세요."
+            : RATE_LIMITED_MESSAGE,
+          ...(geminiQuotaExceeded ? { retryable: false } : {}),
           retryAfterSeconds: RETRY_AFTER_SECONDS,
         },
         {

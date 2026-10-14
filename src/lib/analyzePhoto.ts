@@ -53,11 +53,13 @@ export async function analyzePhoto(
     const data = (await res.json().catch(() => ({}))) as {
       message?: string;
       retryAfterSeconds?: number;
+      retryable?: boolean;
     };
     const headerSec = Number(res.headers.get("Retry-After"));
     throw new AnalyzeError(
       data.message ?? "요청이 많아요. 잠시 뒤에 다시 시도해 주세요.",
       {
+        retryable: data.retryable ?? true,
         retryAfterSeconds:
           data.retryAfterSeconds ??
           (Number.isFinite(headerSec) && headerSec > 0 ? headerSec : 60),
