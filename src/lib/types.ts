@@ -18,6 +18,8 @@ export interface JapanSuggestion {
   name_en?: string; // Kinkaku-ji
   area?: string; // 교토 기타구
   why?: string; // 어떤 점이 닮았는지 한 문장
+  photoUrl?: string; // Google Places 대표 사진
+  photoCredit?: string;
   mapsUrl?: string;
   location?: { latitude?: number; longitude?: number };
 }
