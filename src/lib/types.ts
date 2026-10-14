@@ -36,6 +36,7 @@ export interface AnalyzeResult {
   placeId?: string;
   mapsUrl?: string;
   history?: string[];
+  historySources?: Array<{ title: string; url: string }>;
   culture?: string[];
   nearby?: NearbyPlace[];
   message?: string | null; // identified=false 일 때 이유

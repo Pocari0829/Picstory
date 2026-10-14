@@ -32,7 +32,14 @@ type PlaceItem = {
 type PlacesResponse = { places?: PlaceItem[] };
 
 type GeminiResponse = {
-  candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  candidates?: Array<{
+    content?: { parts?: Array<{ text?: string }> };
+    groundingMetadata?: {
+      groundingChunks?: Array<{
+        web?: { uri?: string; title?: string };
+      }>;
+    };
+  }>;
 };
 
 type VisionHint = {
@@ -428,6 +435,7 @@ ${hintText}
 5. 일본 밖의 장소이면 foreign_place_ko에 "서울 경복궁"처럼 도시와 장소명을 한국어로 적고, similar_japan에 분위기·건축 양식·역할이 닮은 일본 여행지를 ${MAX_SUGGESTIONS}곳 적으세요. 실제로 존재하는 유명한 곳만 쓰고, 각 항목에 name_ko, name_en, area(도시·구역), why(어떤 점이 닮았는지 한 문장)를 채우세요. place_query, name_en, name_ko, subtitle, area, history, culture, nearby는 비워 두세요.
 6. is_place_photo가 false이거나 장소를 식별할 수 없으면 나머지 필드는 비워 두세요. 절대 추측해서 채우지 마세요.
 7. name_ko와 주변 장소·일본 추천지의 한국어 이름은 통용되는 표기를 사용하세요. 일본 장소는 영어 이름을 임의로 한글화하지 말고 일본어 원어 발음에 맞춰 적으세요. 예: Kaminarimon Gate 또는 雷門은 "카미나리몬"입니다.
+8. 일본 장소의 history를 쓸 때만 Google 검색으로 일본어 원문 자료를 확인하세요. 공식 문화재·관광·지자체·박물관 자료를 우선하고, 내용을 한국어로 요약하세요. 인명과 연호는 한자의 뜻으로 번역하지 말고 일본어 발음과 통용되는 한국어 표기를 사용하세요. 예: 平安時代는 "헤이안 시대"이며 "평안 시대"가 아닙니다. 검색으로 확인할 수 없는 내용은 단정하지 마세요.
 
 반드시 JSON 객체만 반환하세요. 마크다운 코드 블록은 사용하지 마세요.
 형식: {"is_place_photo":true,"country_code":"JP","confidence":0.0~1.0,"reason":"판단 근거 한 문장","place_query":"Kaminarimon Gate Asakusa Tokyo","name_en":"YASAKA PAGODA","name_ko":"야사카 탑","subtitle":"Hōkan-ji Temple · 法観寺","area":"교토 히가시야마구","history":["한국어 역사 설명 3~4개"],"culture":["한국어 문화적 의미 2~3개"],"nearby":[{"name_ko":"한국어명","name_en":"영문명","subtitle":"현지명","category":"명소|맛집|상점|시장|카페","walk":"도보 거리","why":"추천 이유","website":null,"phone":null}],"foreign_place_ko":"","similar_japan":[{"name_ko":"금각사","name_en":"Kinkaku-ji","area":"교토 기타구","why":"궁궐·사찰의 웅장한 전통 건축과 정원이 닮았어요."}]}
@@ -448,6 +456,7 @@ nearby는 실제로 방문할 수 있는 장소 4곳을 추천하고, 명소뿐 
             method: "POST",
             headers: jsonHeaders,
             body: JSON.stringify({
+              tools: [{ google_search: {} }],
               contents: [
                 {
                   parts: [
@@ -479,11 +488,20 @@ nearby는 실제로 방문할 수 있는 장소 4곳을 추천하고, 명소뿐 
     }
     if (!gemini) throw lastError ?? new Error("gemini_no_model");
 
-    const text = gemini.candidates?.[0]?.content?.parts?.find(
-      (part) => part.text,
-    )?.text;
+    const candidate = gemini.candidates?.[0];
+    const text = candidate?.content?.parts?.find((part) => part.text)?.text;
     if (!text) throw new Error("gemini_empty_response");
     const generated = parseGeminiJson(text);
+    const historySources = Array.from(
+      new Map(
+        (candidate?.groundingMetadata?.groundingChunks ?? [])
+          .flatMap(({ web }) =>
+            web?.uri ? [{ url: web.uri, title: web.title ?? web.uri }] : [],
+          )
+          .filter((source) => /^https?:\/\//i.test(source.url))
+          .map((source) => [source.url, source] as const),
+      ).values(),
+    ).slice(0, 4);
 
     const confidence =
       typeof generated.confidence === "number" ? generated.confidence : 0;
@@ -709,6 +727,7 @@ nearby는 실제로 방문할 수 있는 장소 4곳을 추천하고, 명소뿐 
       placeId: place.id,
       mapsUrl: place.googleMapsUri,
       history,
+      ...(historySources.length ? { historySources } : {}),
       culture: toStringArray(generated.culture),
       nearby,
     });
